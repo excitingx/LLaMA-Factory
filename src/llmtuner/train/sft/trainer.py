@@ -98,3 +98,41 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             for label, pred in zip(decoded_labels, decoded_preds):
                 res.append(json.dumps({"label": label, "predict": pred}, ensure_ascii=False))
             writer.write("\n".join(res))
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+
+        Subclass and override for custom behavior.
+        """
+        ignore_index = -100
+        labels = inputs["labels"]
+        weights = inputs.pop("weights")
+        outputs = model(**inputs)
+
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        logits = outputs["logits"] if isinstance(outputs, dict) else outputs[0]
+        logits = logits[..., :-1, :].contiguous()
+        # label shift
+        labels = labels[..., 1:].contiguous()
+        weights = weights[..., 1:].contiguous()
+
+        log_probs = -nn.functional.log_softmax(logits, dim=-1)
+        if labels.dim() == log_probs.dim() - 1:
+            labels = labels.unsqueeze(-1)
+            weights = weights.unsqueeze(-1)
+
+        padding_mask = labels.eq(ignore_index)
+        # In case the ignore_index is -100, the gather will fail, so we replace labels by 0. The padding_mask
+        # will ignore them in any case.
+        labels = torch.clamp(labels, min=0)
+        # 取出labels中index对应的模型输出，加起来即为loss 并乘上权重
+        loss = log_probs.gather(dim=-1, index=labels) * weights
+
+        loss.masked_fill_(padding_mask, 0.0)
+        # Take the mean over the label dimensions, then divide by the number of active elements (i.e. not-padded):
+        num_active_elements = padding_mask.numel() - padding_mask.long().sum()
+        loss = loss.sum() / num_active_elements
+        return (loss, outputs) if return_outputs else loss

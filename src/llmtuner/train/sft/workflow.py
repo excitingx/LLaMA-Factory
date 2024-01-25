@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, List, Optional
 
 from transformers import DataCollatorForSeq2Seq, Seq2SeqTrainingArguments
 
-from ...data import get_dataset, split_dataset
+from ...data import get_dataset, split_dataset, DataCollatorForSeq2Seq
 from ...extras.constants import IGNORE_INDEX
 from ...extras.misc import get_logits_processor
 from ...extras.ploting import plot_loss

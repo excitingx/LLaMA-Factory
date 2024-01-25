@@ -49,7 +49,8 @@ def preprocess_supervised_dataset(
 ) -> Dict[str, List[List[int]]]:
     # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
     # for multiturn examples, we only mask the prompt part in each prompt-response pair.
-    model_inputs = {"input_ids": [], "attention_mask": [], "labels": []}
+    model_inputs = {"input_ids": [], "attention_mask": [],
+                    "labels": [], "weights": [], }
 
     for i in range(len(examples["prompt"])):
         if len(examples["prompt"][i]) % 2 != 1 or len(examples["response"][i]) != 1:
@@ -57,11 +58,21 @@ def preprocess_supervised_dataset(
 
         messages = examples["prompt"][i] + examples["response"][i]
         input_ids, labels = [], []
+        tool_token = tokenizer.convert_tokens_to_ids("Tool")
+        input_token = tokenizer.convert_tokens_to_ids("Input")
         for turn_idx, (source_ids, target_ids) in enumerate(
             template.encode_multiturn(
                 tokenizer, messages, examples["system"][i], examples["tools"][i], data_args.cutoff_len
             )
         ):
+            if tool_token in set(target_ids) and input_token in set(target_ids):
+                tool_start_index = target_ids.index(tool_token)
+            else:
+                tool_start_index = len(target_ids)
+            tool_weights = [1] * tool_start_index + [1] * (
+                len(target_ids) - tool_start_index
+            )
+            tool_weights = tool_weights[:len(target_ids)]
             if data_args.train_on_prompt:
                 source_mask = source_ids
             elif turn_idx != 0 and template.efficient_eos:
@@ -71,14 +82,18 @@ def preprocess_supervised_dataset(
 
             input_ids += source_ids + target_ids
             labels += source_mask + target_ids
+            weights += [0 if i == IGNORE_INDEX else 1 for i in source_mask] + tool_weights
 
         if template.efficient_eos:
             input_ids += [tokenizer.eos_token_id]
             labels += [tokenizer.eos_token_id]
+            weights += [1]
 
+        weights = weights[:len(input_ids)]
         model_inputs["input_ids"].append(input_ids)
         model_inputs["attention_mask"].append([1] * len(input_ids))
         model_inputs["labels"].append(labels)
+        model_inputs["weights"].append(weights)
 
     return model_inputs
 
